@@ -1,4 +1,10 @@
 #!/bin/bash
+#From the original script of: 
+#Findlay GM, Daza RM, Martin B, Zhang MD, Leith AP, Gasperini M, Janizek JD, Huang X, Starita LM, Shendure J. 
+#Accurate classification of BRCA1 variants with saturation genome editing. 
+#Nature. 2018 Oct;562(7726):217-222. 
+#doi: 10.1038/s41586-018-0461-z. Epub 2018 Sep 12. PMID: 30209399; PMCID: PMC6181777.
+#https://github.com/shendurelab/saturationGenomeEditing_pipeline
 #Variables definition
 seq_type="NS" #or 
 seq_dir="/mnt/f/BRCA2_NTD/data"
@@ -9,7 +15,7 @@ mkdir $out_dir/fastq
 mkdir $out_dir/fastq/fastqc_out
 fastqc $seq_dir/*.fastq.gz -o $out_dir/fastq/fastqc_out
 echo "Running fastqc."
-#Run seqprep 
+#Run seqprep after renaming files
 cd $seq_dir
 for f in *.fastq.gz; do mv "$f" "X$f"; done
 rename 's/preRP/PRERP/' *.fastq.gz

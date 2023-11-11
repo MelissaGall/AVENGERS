@@ -1,5 +1,12 @@
 #!/usr/bin/env python
 #coding: utf-8
+#From the original script of: 
+#Findlay GM, Daza RM, Martin B, Zhang MD, Leith AP, Gasperini M, Janizek JD, Huang X, Starita LM, Shendure J. 
+#Accurate classification of BRCA1 variants with saturation genome editing. 
+#Nature. 2018 Oct;562(7726):217-222. 
+#doi: 10.1038/s41586-018-0461-z. Epub 2018 Sep 12. PMID: 30209399; PMCID: PMC6181777.
+#https://github.com/shendurelab/saturationGenomeEditing_pipeline
+#The original script was highly modified to fit with our analysis
 #Script to get count of reads in each sam files
 #To be run in directory with sam files
 #Load libraries
