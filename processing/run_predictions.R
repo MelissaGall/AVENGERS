@@ -47,7 +47,7 @@ for (amplicon in ampList){
   OLAr1 <- createVarSimpDF(OLAr1raw, edit3, edit5, posToKeep, exonStart, exonStop, FALSE)
   OLAr2raw <- read.xlsx(paste(expDir, amplicon, "RP2OLA_annotated.xlsx", sep = ""), fill = TRUE)
   OLAr2 <- createVarSimpDF(OLAr2raw, edit3, edit5, posToKeep, exonStart, exonStop, FALSE)
-  ###Get variant excluded due to read counts too low
+  ###Get variants excluded due to read counts too low
   replicatesData <- merge(DMSOr1raw[, c("variant", "edit_string", "codon", "pre", "pre_freq", "post", "post_freq", "pos")], 
                           OLAr2raw[, c("variant", "edit_string", "codon", "pre", "pre_freq", "post", "post_freq")], 
                           by = c("variant", "codon", "edit_string"), 
@@ -123,10 +123,8 @@ processedData$function.score.cis <- globalNorm(processedData, ampList, "function
 processedData$function.score.cis.rp1 <- globalNorm(processedData, ampList, "function.score.cis.rp1")
 processedData$function.score.cis.rp2 <- globalNorm(processedData, ampList, "function.score.cis.rp2")
 
-##Create training data frame (remove unknown clinical outcome and intronic)
-trainingData <- processedData[processedData$expected_clinical != "Unknown",]
-trainingData <- trainingData[!(is.na(trainingData$expected_clinical)),]
-trainingData <- trainingData[trainingData$codon != "Intronic",]
+##Create training data frame (using known variants based on human data)
+trainingData <- processedData[processedData$AA_change %in% c("R2502H", "R2659G", "D2665G", "I2675V", "V2728I", "A2770T", "S2835P", "A2912T", "S2922G", "T3013I", "K3015E", "K3059E", "N3124I"),]
 trainingData$lof <- sapply(trainingData$expected_clinical, assingLOF)
 
 ##Run the prediction
@@ -223,6 +221,7 @@ excludedTables <- list("Summary" = excludedSummary,
                        "Read.counts" = excludedReads, 
                        "DMSO.difference" = excludedDMSO,
                        "Difference.in.two.conditions" = allExcludedVarDiff)
+
 ##Save table of filtered variants
 write.xlsx(excludedTables, file = paste0("../results/excluded_variants_", version, ".xlsx"))
 
@@ -306,9 +305,6 @@ for (amplicon in ampList){
   processedData <- rbind(processedData, mergedAll)
 }
 
-##Save just in case
-processedDataBeforeNorm <- processedData
-
 ##Normalize per exon
 processedData$function.score <- perExonNorm(processedData, ampList, "post.pre.loess")
 processedData$function.score.rp1 <- perExonNorm(processedData, ampList, "post.pre.loess.rp1")
@@ -338,9 +334,7 @@ processedData$function.score.cis.rp1 <- globalNorm(processedData, ampList, "func
 processedData$function.score.cis.rp2 <- globalNorm(processedData, ampList, "function.score.cis.rp2")
 
 ##Get training data
-trainingData <- processedData[processedData$expected_clinical != "Unknown",]
-trainingData <- trainingData[!(trainingData$codon == "Intronic"),]
-trainingData <- trainingData[!(is.na(trainingData$expected_clinical)),]
+trainingData <- processedData[processedData$AA_change %in% c("R2502H", "R2659G", "D2665G", "I2675V", "V2728I", "A2770T", "S2835P", "A2912T", "S2922G", "T3013I", "K3015E", "K3059E", "N3124I"),]
 trainingData$lof <- sapply(trainingData$expected_clinical, assingLOF)
 
 ##Run model
@@ -348,100 +342,98 @@ processedData <- runMclust(trainingData, processedData, "function.score", "proba
 processedData <- runMclust(trainingData, processedData, "function.score.dmso", "proba.dmso")
 processedData <- runMclust(trainingData, processedData, "function.score.cis", "proba.cis")
 processedData <- runMclust(trainingData, processedData, "function.score.ola", "proba.ola")
-processedData <- addAnno(processedData, "proba", "class", 0.95, 0.01)
-processedData <- addAnno(processedData, "proba.dmso", "class.dmso", 0.95, 0.01)
-processedData <- addAnno(processedData, "proba.ola", "class.ola", 0.95,  0.01)
-processedData <- addAnno(processedData, "proba.cis", "class.cis", 0.95,  0.01)
 
-##Merge with spliceAI results and save
+##Calculate OddsPath
+priorP <- 0.1
+
+###Load table with probability corresponding to each OddsPath and extract values based on our PriorP
+priorTab <- read.xlsx("../reference/scores/priorR.xlsx")
+priorVect <- as.vector(unlist(priorTab[priorTab$priorP == priorP, c(-1)]))
+
+processedData$odd <- (processedData$proba * (1 - priorP)) / ((1 - processedData$proba) * priorP)
+
+processedData <- processedData %>%
+  mutate(odd.general.class = case.when(odd >= priorVect[8] ~ "Pathogenic Strong",
+                                 odd < priorVect[8] & odd>= priorVect[7] ~ "Pathogenic Strong",
+                                 odd < priorVect[7] & odd >= priorVect[6] ~ "Pathogenic Moderate",
+                                 odd < priorVect[6] & odd >= priorVect[5] ~ "Pathogenic Supporting",
+                                 odd <= (priorVect[1]) ~ "Benign Strong",
+                                 odd > (priorVect[1]) & odd <= (priorVect[2]) ~ "Benign Strong",
+                                 odd > (priorVect[2]) & odd <= (priorVect[3]) ~ "Benign Moderate",
+                                 odd > (priorVect[3]) & odd<= (priorVect[4]) ~ "Benign Supporting",
+                                 TRUE ~ "Uncertain"))
+###DMSO
+processedData$odd.dmso <- (processedData$proba.dmso * (1 - priorP)) / ((1 - processedData$proba.dmso) * priorP)
+
+processedData <- processedData %>%
+  mutate(odd.dmso.class = case.when(odd.dmso >= priorVect[8] ~ "Pathogenic Strong",
+                                    odd.dmso < priorVect[8] & odd.dmso>= priorVect[7] ~ "Pathogenic Strong",
+                                    odd.dmso < priorVect[7] & odd.dmso >= priorVect[6] ~ "Pathogenic Moderate",
+                                    odd.dmso < priorVect[6] & odd.dmso >= priorVect[5] ~ "Pathogenic Supporting",
+                                    odd.dmso <= (priorVect[1]) ~ "Benign Strong",
+                                    odd.dmso > (priorVect[1]) & odd.dmso <= (priorVect[2]) ~ "Benign Strong",
+                                    odd.dmso > (priorVect[2]) & odd.dmso <= (priorVect[3]) ~ "Benign Moderate",
+                                    odd.dmso > (priorVect[3]) & odd.dmso<= (priorVect[4]) ~ "Benign Supporting",
+                                    TRUE ~ "Uncertain"))
+
+###Cisplatin
+processedData$odd.cis <- (processedData$proba.cis * (1 - priorP)) / ((1 - processedData$proba.cis) * priorP)
+
+processedData <- processedData %>%
+  mutate(odd.cis.class = case.when(odd.cis >= priorVect[8] ~ "Pathogenic Strong",
+                                   odd.cis < priorVect[8] & odd.cis>= priorVect[7] ~ "Pathogenic Strong",
+                                   odd.cis < priorVect[7] & odd.cis >= priorVect[6] ~ "Pathogenic Moderate",
+                                   odd.cis < priorVect[6] & odd.cis >= priorVect[5] ~ "Pathogenic Supporting",
+                                   odd.cis <= (priorVect[1]) ~ "Benign Strong",
+                                   odd.cis > (priorVect[1]) & odd.cis <= (priorVect[2]) ~ "Benign Strong",
+                                   odd.cis > (priorVect[2]) & odd.cis <= (priorVect[3]) ~ "Benign Moderate",
+                                   odd.cis > (priorVect[3]) & odd.cis<= (priorVect[4]) ~ "Benign Supporting",
+                                   TRUE ~ "Uncertain"))
+
+###Olaparib
+processedData$odd.ola <- (processedData$proba.ola * (1 - priorP)) / ((1 - processedData$proba.ola) * priorP)
+processedData <- processedData %>%
+  mutate(odd.ola.class = case.when(odd.ola >= priorVect[8] ~ "Pathogenic Strong",
+                                   odd.ola < priorVect[8] & odd.ola>= priorVect[7] ~ "Pathogenic Strong",
+                                   odd.ola < priorVect[7] & odd.ola >= priorVect[6] ~ "Pathogenic Moderate",
+                                   odd.ola < priorVect[6] & odd.ola >= priorVect[5] ~ "Pathogenic Supporting",
+                                   odd.ola <= (priorVect[1]) ~ "Benign Strong",
+                                   odd.ola > (priorVect[1]) & odd.ola <= (priorVect[2]) ~ "Benign Strong",
+                                   odd.ola > (priorVect[2]) & odd.ola <= (priorVect[3]) ~ "Benign Moderate",
+                                   odd.ola > (priorVect[3]) & odd.ola<= (priorVect[4]) ~ "Benign Supporting",
+                                   TRUE ~ "Uncertain"))
+
+##If DMSO and general classification differ, consider the results as uncertain
+
+###Assign group with global pathogenic or not, etc...
+processedData$group.general <- ifelse(processedData$odd.general.class %in% c("Pathogenic Strong", "Pathogenic Moderate", "Pathogenic Supporting"), "P", "VUS")
+processedData$group.general <- ifelse(processedData$odd.general.class %in% c("Benign Strong", "Benign Moderate", "Benign Supporting"), "B", processedData$odd.general.class)
+
+processedData$group.dmso <- ifelse(processedData$odd.dmso.class %in% c("Pathogenic Strong", "Pathogenic Moderate", "Pathogenic Supporting"), "P", "VUS")
+processedData$group.dmso <- ifelse(processedData$odd.dmso.class %in% c("Benign Strong", "Benign Moderate", "Benign Supporting"), "B", processedData$odd.dmso.class)
+
+###Check for discrepancy
+processedData$final.class <- ifelse((processedData$group.dmso == "P" & processedData$group.general == "B") |
+                                              (processedData$group.dmso == "B" & processedData$group.general == "P"), "Uncertain",
+                                            processedData$odd.dmso.class)
+
+processedData$final.FS <- ifelse((processedData$group.dmso == "P" & processedData$group.general == "B") |
+                                           (processedData$group.dmso == "B" & processedData$group.general == "P"), processedData$function.score,
+                                         processedData$function.score.dmso)
+
+processedData$final.proba <- ifelse((processedData$group.dmso == "P" & processedData$group.general == "B") |
+                                              (processedData$group.dmso == "B" & processedData$group.general == "P"), processedData$proba,
+                                            processedData$proba.dmso)
+#Merge with spliceAI results and save
 processedData$c_nom <- gsub("&gt;", ">", processedData$c_nom)
 processedData$g_nom <- gsub("&gt;", ">", processedData$g_nom)
 spliceAI <- read.xlsx("../reference/splicing/all_exons_summary_spliceAI.xlsx")
-processedData <- merge(processedData, spliceAI[, c("Exon", "g.nom")], by.x = c("exon", "g_nom"), by.y = c("Exon", "g.nom"), all.x = T)
-
-#Classification
-
-##If DMSO different from global, consider as "Uncertain"
-processedData$processedData.class <- ifelse(processedData$class != processedData$class.dmso, "Uncertain", processedData$class.dmso)
-processedData$processedData.FS <- processedData$function.score.dmso
-processedData$processedData.proba <- processedData$proba.dmso
-processedData$processedData.class <- ifelse(processedData$class.dmso == "Intermediate", "Uncertain", processedData$processedData.class)
-
-#Stats
-
-##Stats dataframe
-processedDataStats <- processedData[!(processedData$Affect_splicing == "Yes" & processedData$codon == "Synonymous"),]
-processedDataStats <- processedDataStats[processedDataStats$processedData.class != "Uncertain",]
-
-##Calculate OddsPath
-benign <- processedDataStats[processedDataStats$clinical_sign == "Benign",]
-path <- processedDataStats[processedDataStats$clinical_sign == "Pathogenic",]
-benign <- benign[!(is.na(benign$exon)),]
-path <- path[!(is.na(path$exon)),]
-
-num.benign.ctrl <- nrow(benign)
-num.path.ctrl <- nrow(path)
-num.benign.pred <- nrow(benign[benign$processedData.class == "Functional",])
-num.path.pred <- nrow(path[path$processedData.class == "Non-functional",])
-P1 = num.path.ctrl / (num.benign.ctrl + num.path.ctrl)
-P2path = num.path.pred / (num.path.pred + 1)
-P2benign = 1 / (num.benign.pred  + 1)
-OP.path = (P2path * (1 - P1)) / ((1 - P2path) * P1)
-OP.benign = (P2benign * (1 - P1)) / ((1 - P2benign) * P1)
-print(paste0("OP.path: ", OP.path))
-print(paste0("OP.benign: ", OP.benign))
-
-##Calculate likelihood ratio based on ClinVar
-processedDataNormPath <- processedDataStats[processedDataStats$clinical_sign %in% c("Pathogenic", "Pathogenic/Likely pathogenic", "Likely pathogenic"),]
-processedDataNormBenign <- processedDataStats[processedDataStats$clinical_sign %in% c("Benign", "Benign/Likely benign", "Likely benign"),]
-a <- nrow(processedDataNormPath[processedDataNormPath$processedData.class == "Non-functional",])
-b <- nrow(processedDataNormBenign[processedDataNormBenign$processedData.class == "Non-functional",])
-c <- nrow(processedDataNormPath[processedDataNormPath$processedData.class == "Functional",])
-d <- nrow(processedDataNormBenign[processedDataNormBenign$processedData.class == "Functional",])
-Sensitivity <- (a / (a + c)) * 100
-Specificity <- (d / (b + d)) * 100
-print(paste0("Sensitivity based on ClinVar: ", Sensitivity))
-print(paste0("Specificity based on ClinVar: ", Specificity))
-###Positive LR = sensitivity / (100 – specificity).
-###Negative LR = (100 – sensitivity) / specificity.
-LR.plus = Sensitivity / (100 - Specificity)
-LR.neg = (100 - Sensitivity) / Specificity
-print(paste0("Positive LR based on ClinVar: ", LR.plus))
-print(paste0("Negative LR based on ClinVar: ", LR.neg))
-
-##Calculate likelihood ratio based on codon
-processedDataNormPath <- processedDataStats[processedDataStats$codon == "Non-sense",]
-processedDataNormBenign <- processedDataStats[processedDataStats$codon == "Synonymous",]
-a <- nrow(processedDataNormPath[processedDataNormPath$processedData.class == "Non-functional",])
-b <- nrow(processedDataNormBenign[processedDataNormBenign$processedData.class == "Non-functional",])
-c <- nrow(processedDataNormPath[processedDataNormPath$processedData.class == "Functional",])
-d <- nrow(processedDataNormBenign[processedDataNormBenign$processedData.class == "Functional",])
-Sensitivity <- (a / (a + c)) * 100
-Specificity <- (d / (b + d)) * 100
-print(paste0("Sensitivity based on codon type: ", Sensitivity))
-print(paste0("Specificity based on codon type: ", Specificity))
-LR.plus = Sensitivity / (100 - Specificity)
-LR.neg = (100 - Sensitivity) / Specificity
-print(paste0("Positive LR based on codon type: ", LR.plus))
-print(paste0("Negative LR based on codon type: ", LR.neg))
+processedData <- merge(processedData, spliceAI[, c("Exon", "g.nom", "Affect_splicing")], by.x = c("exon", "g_nom"), by.y = c("Exon", "g.nom"), all.x = T)
 
 #Extract summary data
-processedDataSummary <- processedData[, c("exon", "variant", "edit_string", "pos", "codon", "nuc_change", "AA_change", "c_nom", "g_nom", "dbSNP.ID", "clinical_sign", "Protein.change", "Affect_splicing", "processedData.class",  "processedData.FS", "processedData.proba", "class.dmso", "function.score.dmso", "proba.dmso",  "class", "function.score", "proba", "class.ola", "function.score.ola", "proba.ola", "class.cis", "function.score.cis", "proba.cis")]
-colnames(processedDataSummary) <- c("Exon", "Variant", "edit_string", "Position", "Codon.change", "Nucleotide.change", "AA_change", "c_nom", "g_nom", "dbSNP.ID", "ClinVar.annotation", "Protein.change", "Affect.splicing", "Classification", "Function.score",  "Probability", "DMSO.class", "DMSO.FS", "DMSO.proba", "Global.class", "Global.FS", "Global.proba", "Olaparib.class", "Olaparib.FS", "Olaparib.proba", "Cisplatin.class", "Cisplatin.FS", "Cisplatin.proba")
-
-processedDataSummary <- processedDataSummary[!(duplicated(processedDataSummary)),]
+processedDataSummary <- processedData[, c("exon", "variant", "edit_string", "pos", "codon", "nuc_change", "AA_change", "c_nom", "g_nom", "dbSNP.ID", "clinical_sign", "Protein.change", "Affect_splicing", "final.class",  "final.FS", "final.proba", "odd.general.class", "function.score", "proba",  "odd.dmso.class", "function.score.dmso", "proba.dmso", "odd.ola.class", "function.score.ola", "proba.ola", "odd.general.cis", "function.score.cis", "proba.cis")]
+colnames(processedDataSummary) <- c("Exon", "Variant", "edit_string", "Position", "Codon.change", "Nucleotide.change", "AA_change", "c_nom", "g_nom", "dbSNP.ID", "ClinVar.annotation", "Protein.change", "Affect.splicing", "Classification", "Function.score",  "Probability", "General.class", "General.FS", "General.proba", "DMSO.class", "DMSO.FS", "DMSO.proba", "Olaparib.class", "Olaparib.FS", "Olaparib.proba", "Cisplatin.class", "Cisplatin.FS", "Cisplatin.proba")
 
 #Save file
 write.xlsx(file = paste0("../results/all_exons_results_summary", version, ".xlsx"), processedDataSummary)
 write.xlsx(file = paste0("../results/all_exons_results_full", version, ".xlsx"), processedData)
-
-#Explore results per exon
-ggplot() + 
-  geom_point(data = processedData[processedData$codon %in% c("Intronic", "Non-synonymous"),], aes(x = function.score.dmso, y = proba.dmso), col = "grey") +
-  geom_point(data = processedData[processedData$codon %in% c("Non-sense", "Synonymous"),], aes(x = function.score.dmso, y = proba.dmso, col = codon)) +
-  scale_color_manual(values = c("Intronic" = "darkgrey", "Non-sense" = "#c11600", "Non-synonymous" = "grey", "Synonymous" = "#0c4ee5")) +
-  facet_wrap(. ~ exon) +
-  labs(col = "SNV type") +
-  xlab("Function score DMSO") +
-  ylab("Probability of pathogenicity")+
-  theme(legend.position = "bottom")

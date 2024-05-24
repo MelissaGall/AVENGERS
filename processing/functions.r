@@ -163,51 +163,11 @@ runMclust <- function(trainingData, data, col, colNew){
   trainingData <- trainingData[!(trainingData$expected_clinical == "Functional" & trainingData[, c(col)] < Q10.syn),]
   trainingData <- trainingData[!(trainingData$expected_clinical == "Non-functional" & trainingData[, c(col)] > Q10.ns),]
   #Run the prediction
-  x_mclust.train <- MclustDA(data = trainingData[, c(col)], class = trainingData$lof, G = 1:20, modelNames = c("E"), verbose = F)
+  x_mclust.train <- MclustDA(data = trainingData[, c(col)], class = trainingData$lof, G = 1:20, modelNames = c("V"), verbose = F)
   x_mclust.predict <- predict.MclustDA(x_mclust.train, newdata = dataSubset[, c(col)], newclass = trainingData$lof, prop = c(0.9, 0.1))
   #Merge data
   dataSubset[, c(colNew)] <- x_mclust.predict$z[,2]
   colToMerge <- c("variant", "edit_string", "pos")
   data <- merge(data, dataSubset[, c(colToMerge, colNew)], by = colToMerge, all.x = TRUE)
   return(data)
-}
-
-#Add annotation
-addAnno <- function(data, col, colNew, upThr, lowThr){
-  data[, c(colNew)] <- "Intermediate"
-  data[, c(colNew)][data[, c(col)] >= upThr] <- "Non-functional"
-  data[, c(colNew)][data[, c(col)] <= lowThr] <- "Functional"
-  data <<- data
-}
-
-#Find best threshold. Unused function in last version
-findThr <- function(data, proba){
-  all_low <- c(seq(0.001, 0.05, by = 0.0025))
-  all_up <- c(seq(0.95, 0.995, by = 0.0025))
-  bestThrLow <- 0.05
-  bestThrUp <- 0.99
-  bestF1 <- 0
-  for (upThr in all_up){
-    for (lowThr in all_low){
-      tmpRes <- addAnno(data, proba, "tmp_class", upThr, lowThr)
-      tp <- nrow(tmpRes[tmpRes$tmp_class == "Non-functional" & tmpRes$expected_clinical == "Non-functional",])
-      fp <- nrow(tmpRes[tmpRes$tmp_class == "Non-functional" & tmpRes$expected_clinical == "Functional",])
-      fn <- nrow(tmpRes[tmpRes$tmp_class == "Functional" & tmpRes$expected_clinical == "Non-functional",])
-      #Precision = True Positive / (True Positive + False Positive)
-      precision <- tp / (tp + fp)
-      #Recall = True Positive / (True Positive + False Negative)
-      recall <- tp / (tp + fn)
-      #F1 Score = 2 * (Precision * Recall) / (Precision + Recall)
-      f1Score <- 2 * (precision * recall) / (precision + recall)
-      if (f1Score > bestF1){
-        bestF1 <- f1Score
-        bestThrUp <- upThr
-        bestThrLow <- lowThr
-      }
-    }
-  }
-  print(paste("Best up threshold is", bestThrUp))
-  print(paste("Best low threshold is", bestThrLow))
-  print(paste("Best F1 is", bestF1))
-  return(c(bestThrUp, bestThrLow, bestF1))
 }
